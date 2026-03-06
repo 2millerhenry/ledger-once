@@ -4,7 +4,7 @@ My AI agent charged a customer 5 times.
 
 Retry storm → duplicate Stripe charges
 
-![ledger demo](docs/demo.gif)
+![ledger demo](https://raw.githubusercontent.com/2millerhenry/Ledger/main/docs/demo.gif)
 
 Exactly-once execution for AI agent tool calls.
 
