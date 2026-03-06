@@ -92,6 +92,8 @@ cd ledger
 pip install -e .
 python demos/demo_stripe_charge.py
 ```
+
+```
 💳 POST /v1/charges  customer=cus_42  amount=$49  (total so far: $49)
 💳 POST /v1/charges  customer=cus_42  amount=$49  (total so far: $98)
 💳 POST /v1/charges  customer=cus_42  amount=$49  (total so far: $147)
