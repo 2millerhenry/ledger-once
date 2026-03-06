@@ -2,7 +2,7 @@
 
 My AI agent charged a customer 5 times.
 
-retry storm → duplicate Stripe charges
+Retry storm → duplicate Stripe charges
 
 ![ledger demo](docs/demo.gif)
 
@@ -87,10 +87,9 @@ customer charged $245             customer charged $49
 ## See the failure in 10 seconds
 
 ```bash
-git clone https://github.com/yourusername/ledger
-cd ledger
-pip install -e .
-python demos/demo_stripe_charge.py
+git clone https://github.com/2millerhenry/Ledger
+cd Ledger
+python3 demos/demo_stripe_charge.py
 ```
 
 ```
@@ -116,26 +115,26 @@ python demos/demo_stripe_charge.py
 Try the other failure modes:
 
 ```bash
-python demos/demo_concurrent.py    # 3 workers race to charge the same customer
-python demos/demo_agent_loop.py    # runaway agent fires the tool repeatedly
+python3 demos/demo_concurrent.py    # 3 workers race to charge the same customer
+python3 demos/demo_agent_loop.py    # runaway agent fires the tool repeatedly
 ```
 
 ---
 
 ## Install
 
-```bash
-pip install ledger-once
+Copy [`ledger.py`](ledger.py) into your project:
+
+```python
+from ledger import guard
 ```
 
-Or copy [`ledger.py`](ledger.py) into your project — one file, zero dependencies.
-
-**Optional** — clone and run locally:
+Or clone and run the demos:
 
 ```bash
-git clone https://github.com/yourusername/ledger
-cd ledger
-pip install -e .
+git clone https://github.com/2millerhenry/Ledger
+cd Ledger
+python3 demos/demo_stripe_charge.py
 ```
 
 ---
@@ -314,6 +313,7 @@ One word change.
 **Exactly-once execution for AI agents.**
 
 ```bash
-pip install ledger-once
-python demos/demo_stripe_charge.py
+git clone https://github.com/2millerhenry/Ledger
+cd Ledger
+python3 demos/demo_stripe_charge.py
 ```
