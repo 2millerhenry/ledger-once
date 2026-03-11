@@ -1,5 +1,7 @@
 # Ledger
 
+[![PyPI](https://img.shields.io/pypi/v/ledger-once)](https://pypi.org/project/ledger-once/)
+
 **Exactly-once execution for AI agent tool calls.**
 
 Your AI agent will retry. Ledger makes sure it doesn't matter.
