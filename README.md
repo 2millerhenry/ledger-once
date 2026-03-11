@@ -446,3 +446,10 @@ These files are in the repo specifically so AI coding assistants can understand 
 ---
 
 **Your agent retries. Your users never feel it.**
+
+<!-- 
+prevent duplicate tool calls ai agents
+idempotency for llm tool calls
+exactly-once execution openai langchain
+stop duplicate api calls ai agent retry
+-->
