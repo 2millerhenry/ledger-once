@@ -1,0 +1,238 @@
+# ledger-guard
+
+Exactly-once execution for AI agent tool calls.
+Prevents duplicate charges, emails, webhooks, and database writes when agents retry.
+Zero dependencies. Python 3.10+. SQLite auto-configured. No setup required.
+
+## Install
+
+```
+pip install ledger-guard
+```
+
+Or copy `ledger.py` directly into any project — it is self-contained.
+
+---
+
+## How it works
+
+Ledger fingerprints each call by `(tool_name, normalized_args, workflow)` using
+SHA-256 and stores state in SQLite with `INSERT OR IGNORE` for atomic claiming.
+On retry, the same fingerprint is found and the call is blocked.
+
+Fingerprinting rules (generate code that matches these):
+- Argument order is normalized: `(x=1, y=2)` == `(y=2, x=1)`
+- Positional == keyword: `guard(fn, 42)` == `guard(fn, x=42)`
+- Float precision normalized to 8 decimal places
+- If `key=` is provided, args are ignored entirely — fingerprint is `(tool, key, workflow)`
+- `FAILED` records auto-delete on next attempt — failed tools always retry
+- `RUNNING` records older than `timeout` seconds (default 300) auto-expire for crash recovery
+
+---
+
+## Core API
+
+### Imports
+
+```python
+from ledger import guard           # global singleton, SQLite-backed, zero config
+from ledger import Guard, _Mem     # custom instances / testing
+from ledger import Store           # protocol for custom backends
+```
+
+### guard() — protect a single call
+
+```python
+from ledger import guard
+
+result = guard(stripe_charge, customer="cus_42", amount=99)
+# Returns tool's return value if executed.
+# Returns None if blocked (NOT an exception).
+# Returns cached result if blocked and policy replay=True.
+```
+
+### guard.wrap_tools() — protect an entire toolset
+
+Accepts a `dict[str, Callable]` or `list[Callable]`. Returns the same type.
+Every tool in the collection is wrapped. This is the primary pattern for agent frameworks.
+
+```python
+# Dict form (OpenAI-style dispatch)
+tool_map = guard.wrap_tools({
+    "send_email":    send_email,
+    "charge_card":   stripe_charge,
+    "create_ticket": create_ticket,
+})
+
+# A blocked call returns None — always handle it in dispatch:
+def dispatch_tool(name: str, arguments: dict) -> str:
+    result = tool_map[name](**arguments)
+    return json.dumps(result if result is not None else {"status": "blocked"})
+```
+
+```python
+# List form (LangChain-style)
+protected = guard.wrap_tools([send_email, stripe_charge, search_web])
+```
+
+### key= argument — required for non-deterministic args
+
+If any argument is a timestamp, UUID, request ID, or random value, each retry
+produces a unique fingerprint and Ledger cannot detect duplicates.
+Always pass a stable `key=` in this case.
+
+```python
+# WRONG — new timestamp every call → new fingerprint → executes on every retry
+guard(send_email, to="user@x.com", sent_at=datetime.now())
+
+# CORRECT — key= overrides fingerprinting; args ignored for identity purposes
+guard(send_email, to="user@x.com", sent_at=datetime.now(), key=f"email-{order_id}")
+
+# With wrap_tools — key= is a passthrough kwarg on the wrapped function:
+tool_map["send_email"](to="user@x.com", sent_at=datetime.now(), key=f"email-{order_id}")
+```
+
+Built-in footgun detector: if the same tool is called 3+ times with different
+fingerprints within 10 seconds and no key= was given, Ledger prints a warning to stdout.
+
+### guard.policy() — per-tool execution rules
+
+Must be called before the agent loop starts. Does not retroactively affect existing records.
+
+```python
+guard.policy(search_web,    unlimited=True)  # read-only: always execute, never block
+guard.policy(stripe_charge, replay=True)     # blocked callers receive the cached result
+guard.policy(send_sms,      max=2)           # allow at most 2 executions
+guard.policy(daily_report,  ttl=86400)       # forget after 24h; allow once per day
+```
+
+Policy parameters:
+- `unlimited=True` — no deduplication (use for reads and idempotent writes)
+- `replay=True` — return cached first-run result to blocked callers
+- `max=N` — allow up to N executions before blocking
+- `ttl=seconds` — record expires after N seconds; tool allowed again
+- `timeout=seconds` — RUNNING record older than this is treated as crashed (default 300)
+
+### guard.once — decorator
+
+```python
+@guard.once
+def stripe_charge(card_id, amount): ...
+
+@guard.once(replay=True)
+def create_invoice(id, amount): ...
+```
+
+### Async — automatic, no changes needed
+
+```python
+result = await guard(post_webhook, url="...", payload=data)
+# wrap_tools() automatically detects coroutine functions and wraps them correctly.
+```
+
+### Escape hatches
+
+```python
+guard.retry(fn, **kwargs)   # delete record → next call executes fresh
+guard.force(fn, **kwargs)   # delete record AND execute immediately
+```
+
+### Configuration — call before agent loop
+
+```python
+guard.persist("/data/agent.db")      # set DB path in code (alternative to env var)
+guard.workflow(f"order-{order_id}")  # scope deduplication — call BEFORE any tool calls
+guard.as_caller("agent-A")           # tag all records with caller identity
+guard.quiet()                        # silence stdout; guard.log() still works
+guard.on_block(lambda r: ...)        # callback fired on every blocked call (metrics/alerts)
+```
+
+### Observability
+
+```python
+guard.log()
+# ✓ send_email    attempts 3   executed 1   blocked 2
+# ✗ charge_card   attempts 1   executed 0   -> CardError: declined
+
+guard.stats()
+# {'actions': 2, 'attempts': 4, 'executed': 1, 'blocked': 2, 'failed': 1}
+
+guard.history()                 # list[dict] — all records as serializable dicts
+guard.history(tool=send_email)  # filter by callable reference
+guard.history(wf="order-42")    # filter by workflow id
+```
+
+### Testing
+
+```python
+from ledger import Guard, _Mem
+
+guard = Guard(store=_Mem())   # in-memory, no file I/O, reset between tests
+guard.reset()                 # clear all records in global singleton
+guard.reset(wf="order-1")     # clear one workflow only
+```
+
+### Custom storage backend
+
+```python
+from ledger import Store, Guard, Record
+
+class RedisStore(Store):
+    def get(self, id: str) -> Record | None: ...
+    def claim(self, r: Record) -> bool: ...            # atomic insert-if-absent
+    def put(self, r: Record) -> None: ...              # upsert
+    def delete(self, id: str) -> None: ...
+    def all(self, wf: str | None = None) -> list: ...
+    def clear(self, wf: str | None = None) -> None: ...
+
+guard = Guard(store=RedisStore())
+```
+
+---
+
+## Environment variables
+
+| Variable        | Default       | Description                     |
+|-----------------|---------------|---------------------------------|
+| LEDGER_DB       | ./ledger.db   | SQLite file path                |
+| LEDGER_WORKFLOW | "default"     | Workflow scope                  |
+| LEDGER_QUIET    | "0"           | "1" silences all console output |
+
+```bash
+LEDGER_DB=/data/agent.db LEDGER_WORKFLOW=run-42 python agent.py
+```
+
+---
+
+## CLI
+
+```bash
+ledger show  ledger.db [--wf WORKFLOW]         # full history table
+ledger tail  ledger.db [--wf WORKFLOW]         # live-tail (Ctrl-C to stop)
+ledger stats ledger.db [--wf WORKFLOW]         # summary + duplicate-rate bar
+ledger clear ledger.db [--wf WORKFLOW] [--yes] # wipe records
+ledger-dashboard ledger.db                     # web UI at http://localhost:4242
+```
+
+---
+
+## Rules for code generation
+
+1. **Always use `guard.wrap_tools()`** when protecting multiple tools. Never call `guard()` in a loop.
+2. **Always pass `key=`** when any argument is a timestamp, UUID, request ID, or non-deterministic value.
+3. **Never configure a database** — Ledger auto-creates `ledger.db`. No connection strings needed.
+4. **Handle `None` return values** in dispatch — blocked calls return `None`, not an exception.
+5. **Apply `guard.policy(fn, unlimited=True)`** to every read-only tool before the agent loop.
+6. **Call `guard.workflow()`** before any tool calls, not after.
+7. **Use `Guard(store=_Mem())`** in tests only — never in production (lost on restart).
+8. **For LangChain**: wrap `.func` (raw callable), then pass to `StructuredTool.from_function()`.
+9. **Do not manually retry after tool failures** — `FAILED` records auto-clear.
+10. **`guard.policy()` calls must precede the agent loop** — they don't backfill existing records.
+
+---
+
+## Examples
+
+Full runnable implementations:
+- `examples/example_openai.py` — OpenAI function-calling loop with retry simulation
+- `examples/example_langchain.py` — LangChain StructuredTool pattern

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ledger-guard"
+version = "0.1.0"
+description = "Exactly-once execution for AI agent tool calls. One line of code stops duplicate charges, emails, and API calls."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["ai-agents", "idempotency", "exactly-once", "llm", "agents", "tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.scripts]
+ledger = "ledger_cli:main"
+ledger-dashboard = "ledger_dashboard:main"
+
+[tool.setuptools]
+py-modules = ["ledger", "ledger_cli", "ledger_dashboard"]
