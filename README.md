@@ -14,9 +14,7 @@ guard(stripe_charge, customer="cus_42", amount=99)   # blocked  ✗
 guard(stripe_charge, customer="cus_42", amount=99)   # blocked  ✗
 ```
 
-
-
-![Ledger demo](Docs/LEDGERGIF-ezgif.com-video-to-gif-converter.gif)
+<video src="docs/ledger_demo.mp4" autoplay loop muted playsinline width="100%"></video>
 
 ---
 
@@ -50,7 +48,7 @@ If your agent calls external APIs, you already have this risk.
 ## Install
 
 ```bash
-pip install ledger-guard
+pip install ledger-once
 ```
 
 Or just copy the file — zero dependencies, no setup:
@@ -348,7 +346,7 @@ Ledger ships with first-class support for AI coding assistants so you never have
 ### Copy-paste prompt — OpenAI / any dict-based framework
 
 ```
-I want to add ledger-guard to my agent to prevent duplicate tool calls on retry.
+I want to add ledger-once to my agent to prevent duplicate tool calls on retry.
 
 Step 1 — Find my tool_map dict (or wherever I dispatch tool calls by name).
 Step 2 — Wrap it: tool_map = guard.wrap_tools(tool_map)
@@ -367,7 +365,7 @@ Import only: from ledger import guard
 ### Copy-paste prompt — LangChain
 
 ```
-I want to add ledger-guard to my LangChain agent to prevent duplicate tool calls.
+I want to add ledger-once to my LangChain agent to prevent duplicate tool calls.
 
 The rule for LangChain: wrap raw Python functions BEFORE StructuredTool.from_function().
 Do NOT wrap StructuredTool objects directly.
@@ -386,7 +384,7 @@ Do not configure a database. Import only: from ledger import guard
 ### Copy-paste prompt — Async agent
 
 ```
-I want to add ledger-guard to my async agent. No await changes needed —
+I want to add ledger-once to my async agent. No await changes needed —
 Ledger handles async automatically.
 
 Step 1 — Wrap my tools: tool_map = guard.wrap_tools(tool_map)
