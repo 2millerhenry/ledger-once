@@ -1,9 +1,19 @@
 """
-ledger.py — AI agents retry constantly. Ledger stops the damage.
+ledger.py — Exactly-once execution for AI agent tool calls.
 
-ZERO CONFIG — works out of the box, persists automatically, no setup needed:
+AI agents retry tools. Ledger makes sure that doesn't cause duplicate charges,
+emails, webhooks, or database writes.
+
+PROTECT YOUR ENTIRE TOOLSET (recommended — one line, everything covered):
 
     from ledger import guard
+
+    tools = guard.wrap_tools(tools)   # dict or list — every tool auto-protected
+
+    # That's it. Every tool now runs at most once per unique argument set,
+    # even across restarts, concurrent workers, and crashed processes.
+
+PROTECT A SINGLE CALL:
 
     guard(send_email, to="user@example.com")   # runs
     guard(send_email, to="user@example.com")   # blocked — already sent
@@ -16,6 +26,22 @@ ZERO CONFIG — works out of the box, persists automatically, no setup needed:
 
     # ledger.db is created automatically in your current directory.
     # Records survive restarts. No configuration required.
+
+GUARANTEES:
+    • Duplicate calls are always blocked — same args + workflow = same fingerprint
+    • Records persist across restarts — SQLite file survives process death
+    • Concurrent workers cannot execute the same tool twice — atomic INSERT OR IGNORE
+    • Crashed processes are recovered — RUNNING records expire after timeout (default 300s)
+    • Failed tools always retry — FAILED records are cleared automatically
+
+FINGERPRINT ALGORITHM (fully deterministic):
+    fingerprint = sha256(tool_name + normalized_args + workflow)[:32]
+
+    Normalization rules so retries always match:
+    • Arg order ignored:   guard(fn, x=1, y=2) == guard(fn, y=2, x=1)
+    • Positional=keyword:  guard(fn, 42)        == guard(fn, x=42)
+    • Float drift handled: guard(fn, x=99.99)   == guard(fn, x=99.9900000001)
+    • Custom key overrides: guard(fn, ..., key="order-99") uses key only
 
 WRAP AN ENTIRE TOOLSET (agent frameworks):
     tools = guard.wrap_tools(tools)   # dict or list — every tool auto-protected
@@ -86,14 +112,43 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 _log = logging.getLogger("ledger")
 
-__version__ = "0.1.0"
+__version__ = "0.1.3"
 
-__all__ = ["Guard", "guard", "Store", "Record", "Status", "Policy"]
+__all__ = ["Guard", "guard", "Store", "Record", "Status", "Policy", "BLOCKED"]
 
 # ── Defaults read from environment ────────────────────────────────────────────
 _DEFAULT_DB       = os.environ.get("LEDGER_DB",      "ledger.db")
 _DEFAULT_WORKFLOW = os.environ.get("LEDGER_WORKFLOW", "default")
 _DEFAULT_QUIET    = os.environ.get("LEDGER_QUIET",    "0") == "1"
+
+
+# ── Blocked sentinel ──────────────────────────────────────────────────────────
+#
+# Returned when a duplicate call is blocked and replay=False (the default).
+# Use `result is BLOCKED` in dispatch loops — cleaner than `result is None`
+# because None is a valid return value from some tools.
+#
+#   result = tool_map["send_email"](to="user@x.com")
+#   if result is BLOCKED:
+#       return {"status": "already sent"}
+
+class _BlockedType:
+    """Singleton sentinel returned when Ledger blocks a duplicate call."""
+    _instance = None
+
+    def __new__(cls) -> "_BlockedType":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __bool__(self) -> bool:
+        return False  # `if result:` naturally skips blocked calls
+
+    def __repr__(self) -> str:
+        return "BLOCKED"
+
+
+BLOCKED = _BlockedType()
 
 
 # ── State machine ─────────────────────────────────────────────────────────────
@@ -455,7 +510,8 @@ class _Engine:
         self.policies: dict[str, Policy] = {}
         self.default   = Policy()
         self.quiet     = quiet
-        self._on_block: Callable[[Record], None] | None = None
+        self._on_block:   Callable[[Record], None] | None = None
+        self._on_success: Callable[[Record], None] | None = None
         # key= footgun detection: track recent unique fingerprints per tool
         # {tool_name: [(fingerprint, timestamp), ...]}
         self._recent_fps: dict[str, list[tuple[str, float]]] = {}
@@ -557,6 +613,11 @@ class _Engine:
         rec.since   = None
         rec.touched = datetime.now(timezone.utc)
         self.store.put(rec)
+        if self._on_success:
+            try:
+                self._on_success(rec)
+            except Exception:
+                pass
 
     def fail(self, rec: Record, error: Exception) -> None:
         rec.status  = Status.FAILED
@@ -593,17 +654,24 @@ class _Engine:
 class Guard:
     """Idempotency guard for AI agent tool calls.
 
+    Guarantees:
+        • Duplicate calls are always blocked (same args + workflow = same fingerprint)
+        • Records persist across restarts (SQLite survives process death)
+        • Concurrent workers cannot execute the same tool twice (atomic claim)
+        • Crashed processes recover (stale RUNNING records expire after 300s)
+        • Failed tools always retry (FAILED records auto-clear)
+
     Works out of the box with zero configuration:
 
         from ledger import guard
+        tools = guard.wrap_tools(tools)   # protect everything at once
+
+    Or protect individual calls:
+
         guard(send_email, to="user@example.com")
 
     Records are automatically persisted to ./ledger.db so nothing is lost
     on restart. Output is printed to the console so you can see it working.
-
-    For agent frameworks, protect all tools at once:
-
-        tools = guard.wrap_tools(tools)
 
     Custom storage backend (Redis, Postgres, etc.):
 
@@ -624,6 +692,8 @@ class Guard:
     guard.workflow("run-123")    scope to a specific run or order
     guard.as_caller("agent-A")   tag records with an identity
     guard.persist("path.db")     override the database path in code
+    guard.on_block(fn)           callback fired on every blocked call
+    guard.on_success(fn)         callback fired on every successful execution
     guard.retry(fn, ...)         clear a record; allow the next call through
     guard.force(fn, ...)         execute immediately regardless of history
     guard.log()                  print a summary of all recorded actions
@@ -666,7 +736,7 @@ class Guard:
         tool  = _tool_name(fn)
         ok, rec, cached = self._engine.check_and_claim(tool, fargs, self._engine.wf, key)
         if not ok:
-            return cached
+            return cached if cached is not None else BLOCKED
         try:
             result = fn(*args, **kwargs)
             self._engine.succeed(rec, result)
@@ -682,7 +752,7 @@ class Guard:
         tool  = _tool_name(fn)
         ok, rec, cached = self._engine.check_and_claim(tool, fargs, self._engine.wf, key)
         if not ok:
-            return cached
+            return cached if cached is not None else BLOCKED
         try:
             result = await fn(*args, **kwargs)
             self._engine.succeed(rec, result)
@@ -728,6 +798,8 @@ class Guard:
     def wrap_tools(
         self,
         tools: dict[str, Callable] | list[Callable],
+        *,
+        blocked_return: Any = None,
     ) -> dict[str, Callable] | list[Callable]:
         """Automatically protect an entire toolset — no per-call guard() needed.
 
@@ -738,12 +810,21 @@ class Guard:
 
             tools = guard.wrap_tools([send_email, charge_card])
 
+        Blocked calls return None by default. Use blocked_return to set a
+        custom value so your dispatch loop never needs a None check:
+
+            tools = guard.wrap_tools(tools, blocked_return={"status": "blocked"})
+
+            # Now dispatch is just:
+            result = tool_map[name](**args)
+            return json.dumps(result)   # no None check needed
+
         Returns the same collection type that was passed in.
         """
         if isinstance(tools, dict):
-            return {name: self._wrap_one(fn) for name, fn in tools.items()}
+            return {name: self._wrap_one(fn, blocked_return) for name, fn in tools.items()}
         if isinstance(tools, list):
-            return [self._wrap_one(fn) for fn in tools]
+            return [self._wrap_one(fn, blocked_return) for fn in tools]
         raise TypeError(
             f"wrap_tools() expects a dict or list of callables, "
             f"got {type(tools).__name__!r}.\n"
@@ -751,7 +832,7 @@ class Guard:
             "  list example: [send_email, charge_card]"
         )
 
-    def _wrap_one(self, fn: Callable) -> Callable:
+    def _wrap_one(self, fn: Callable, blocked_return: Any = None) -> Callable:
         if not callable(fn):
             raise TypeError(
                 f"wrap_tools() expected a callable, "
@@ -761,14 +842,16 @@ class Guard:
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 key = kwargs.pop("key", None)
-                return await self._acall(fn, args, kwargs, key)
+                result = await self._acall(fn, args, kwargs, key)
+                return blocked_return if result is None else result
             async_wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
             return async_wrapper
         else:
             @functools.wraps(fn)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 key = kwargs.pop("key", None)
-                return self._call(fn, args, kwargs, key)
+                result = self._call(fn, args, kwargs, key)
+                return blocked_return if result is None else result
             sync_wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
             return sync_wrapper
 
@@ -840,6 +923,20 @@ class Guard:
             ))
         """
         self._engine._on_block = fn
+        return self
+
+    def on_success(self, fn: Callable[[Record], None]) -> "Guard":
+        """Register a callback fired every time a tool executes successfully.
+
+            guard.on_success(lambda r: metrics.increment(
+                "ledger.executed", tags={"tool": r.tool}
+            ))
+
+        Pair with on_block() for full observability:
+            guard.on_success(lambda r: metrics.increment("ledger.executed", tags={"tool": r.tool}))
+            guard.on_block(lambda r:   metrics.increment("ledger.blocked",  tags={"tool": r.tool}))
+        """
+        self._engine._on_success = fn
         return self
 
     def quiet(self) -> "Guard":
@@ -917,6 +1014,40 @@ class Guard:
                 guard.reset()
         """
         self._engine.store.clear(wf)
+
+    def check(self) -> bool:
+        """Verify Ledger is working correctly — runs a self-test in memory.
+
+        Returns True if exactly-once semantics are functioning. Raises
+        AssertionError with a description if something is wrong.
+
+        Use this after setup to confirm the integration is correct:
+
+            assert guard.check(), "Ledger not working"
+
+        Or in your test suite:
+
+            def test_ledger_works():
+                assert guard.check()
+        """
+        from ledger import Guard, _Mem
+        g = Guard(store=_Mem())
+        calls = []
+
+        def _test_fn(x: int) -> dict:
+            calls.append(x)
+            return {"x": x}
+
+        g(_test_fn, x=1)
+        g(_test_fn, x=1)
+        g(_test_fn, x=1)
+
+        s = g.stats()
+        assert len(calls) == 1,      f"expected 1 execution, got {len(calls)}"
+        assert s["executed"] == 1,   f"expected executed=1, got {s['executed']}"
+        assert s["blocked"]  == 2,   f"expected blocked=2, got {s['blocked']}"
+        assert s["attempts"] == 3,   f"expected attempts=3, got {s['attempts']}"
+        return True
 
 
 # ── Global singleton ──────────────────────────────────────────────────────────
