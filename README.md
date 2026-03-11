@@ -147,6 +147,26 @@ Ledger fingerprints every call using `(tool_name, args, workflow)`, claims it at
 
 ---
 
+## See exactly what your agent is doing
+
+Ledger records every tool attempt, execution, and blocked duplicate.
+
+```python
+guard.log()
+# ✓ send_email    attempts 3   executed 1   blocked 2
+# ✗ stripe_charge attempts 1   executed 0   → CardError: declined
+```
+
+Or inspect it live:
+
+```bash
+ledger-dashboard ledger.db
+```
+
+See every tool call in real time — what executed, what was blocked, and which workflow triggered it. When something looks wrong, you'll know immediately.
+
+---
+
 ## Edge cases handled automatically
 
 **Argument order doesn't matter**
