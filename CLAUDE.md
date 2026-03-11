@@ -1,6 +1,6 @@
 # Ledger — AI Integration Brief
 
-**ledger-guard** gives any AI agent tool call exactly-once execution semantics.
+**Ledger Once** gives any AI agent tool call exactly-once execution semantics.
 It prevents duplicate charges, emails, webhooks, and database writes when agents retry.
 Think Stripe idempotency keys, but automatic and applied to every tool call.
 
