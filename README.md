@@ -14,7 +14,8 @@ guard(stripe_charge, customer="cus_42", amount=99)   # blocked  ✗
 guard(stripe_charge, customer="cus_42", amount=99)   # blocked  ✗
 ```
 
-<video src="docs/ledger_demo.mp4" autoplay loop muted playsinline width="100%"></video>
+![Ledger demo](Docs/LEDGERGIF-ezgif.com-video-to-gif-converter.gif)
+
 
 ---
 
