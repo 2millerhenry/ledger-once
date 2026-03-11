@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/ledger-once)](https://pypi.org/project/ledger-once/)
 
+
 **Exactly-once execution for AI agent tool calls.**
 
 Your AI agent will retry. Ledger makes sure it doesn't matter.
@@ -17,7 +18,6 @@ guard(stripe_charge, customer="cus_42", amount=99)   # blocked  ✗
 ```
 
 ![Ledger demo](Docs/LEDGERGIF-ezgif.com-video-to-gif-converter.gif)
-
 
 ---
 
@@ -246,7 +246,7 @@ ledger clear ledger.db [--wf WORKFLOW] [--yes] # wipe records
 ## Dashboard
 
 ```bash
-python ledger_dashboard.py
+ledger-dashboard ledger.db
 ```
 
 Open `http://localhost:4242` to see every tool call in real time:
@@ -255,6 +255,8 @@ Open `http://localhost:4242` to see every tool call in real time:
 * what was blocked
 * which workflow triggered it
 * duplicate counts
+
+The dashboard is local — it runs in your terminal against your own `ledger.db`. No hosting, no auth, no setup. Every developer runs their own instance.
 
 ---
 
@@ -414,8 +416,8 @@ guard.stats()
 Or inspect `ledger.db` directly from the terminal:
 
 ```bash
-ledger stats ledger.db   # summary + duplicate-rate bar
-ledger show  ledger.db   # per-tool history table
+ledger stats ledger.db      # summary + duplicate-rate bar
+ledger show  ledger.db      # per-tool history table
 ledger-dashboard ledger.db  # full web UI at http://localhost:4242
 ```
 
